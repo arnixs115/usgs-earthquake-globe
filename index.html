@@ -175,6 +175,26 @@
     color: var(--text-faint);
     letter-spacing: 0.02em;
   }
+  .dr-hist-title{
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+    margin-bottom: 5px;
+  }
+  #dr-history{
+    max-height: 168px;
+    overflow-y: auto;
+  }
+  .dr-hist-row{
+    display:flex;
+    justify-content:space-between;
+    padding: 2.5px 0;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .dr-hist-row.today{ color: var(--accent); font-weight:600; }
+  .dr-hist-date{ letter-spacing: 0.01em; }
+  .dr-hist-count{ font-weight:600; }
 
   @media (max-width: 860px){
     .daily-record{ width: 150px; padding: 10px 11px 9px; }
@@ -391,7 +411,7 @@
   <header>
     <div class="title-block">
       <h1>EARTHQUAKE DASHBOARD</h1>
-      <span class="subtitle">USGS M2.5+ · 지난 24시간</span>
+      <span class="subtitle" id="feed-subtitle">USGS M2.5+ · 최근 7일 데이터 불러오는 중…</span>
     </div>
     <div class="status-block">
       <span id="status-fetch"><span class="status-dot" id="status-dot"></span><span id="status-text">연결 중…</span></span>
@@ -427,7 +447,10 @@
           <span class="dr-label">어제 대비</span>
           <span class="dr-value" id="dr-change">—</span>
         </div>
-        <div class="dr-footnote" id="dr-footnote">기준 · M2.5+ / 최근 24시간</div>
+        <div class="dr-divider"></div>
+        <div class="dr-hist-title">최근 7일 기록</div>
+        <div id="dr-history"></div>
+        <div class="dr-footnote" id="dr-footnote">기준 · M2.5+ / 날짜별(KST) 집계</div>
       </div>
 
       <div id="overlay">
@@ -447,7 +470,7 @@
 
   <footer>
     <div class="slider-head">
-      <span id="slider-window-label">시간대 필터 · 3시간 단위</span>
+      <span id="slider-window-label">시간대 필터 · 최근 7일 · 3시간 단위</span>
       <span id="range-label">— : — ~ — : —</span>
     </div>
     <div class="slider-track-wrap">
@@ -467,10 +490,12 @@
   // ============================================================
   // Config
   // ============================================================
-  var USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson";
+  var USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson";
   var GLOBE_RADIUS = 2;
   var BUCKET_HOURS = 3;
-  var BUCKET_COUNT = 8; // 24h / 3h
+  var BUCKETS_PER_DAY = 8;   // 24h / 3h
+  var DAYS_COUNT = 7;
+  var BUCKET_COUNT = BUCKETS_PER_DAY * DAYS_COUNT; // 56
 
   var COLORS = {
     magLow:   0x4ade80,
@@ -487,8 +512,9 @@
   var state = {
     allFeatures: [],      // full USGS features, untouched, in memory
     fetchedAt: null,
-    buckets: [],           // [{start, end}, ...] boundaries in ms epoch
+    buckets: [],           // [{start, end, dayKey}, ...] boundaries in ms epoch
     selectedBucketIndex: BUCKET_COUNT - 1,
+    todayKey: null,        // Asia/Seoul date key of "today", set on fetch
     selectedId: null,
     loading: true,
     error: null
@@ -514,7 +540,9 @@
     drToday: document.getElementById('dr-today'),
     drYesterday: document.getElementById('dr-yesterday'),
     drChange: document.getElementById('dr-change'),
-    drFootnote: document.getElementById('dr-footnote')
+    drFootnote: document.getElementById('dr-footnote'),
+    drHistory: document.getElementById('dr-history'),
+    feedSubtitle: document.getElementById('feed-subtitle')
   };
 
   // ============================================================
@@ -764,22 +792,69 @@
   }
 
   // ============================================================
-  // Time buckets
+  // Time buckets — 7 days × 8 (3-hour) buckets, aligned to
+  // Asia/Seoul calendar-day boundaries (not a rolling N-hour window)
   // ============================================================
-  function buildBuckets(nowMs){
-    var start = nowMs - 24 * 3600 * 1000;
-    var buckets = [];
-    for (var i = 0; i < BUCKET_COUNT; i++){
-      var bStart = start + i * BUCKET_HOURS * 3600 * 1000;
-      var bEnd = bStart + BUCKET_HOURS * 3600 * 1000;
-      buckets.push({ start: bStart, end: bEnd });
+  function getKSTDateKey(ms){
+    // en-CA locale gives YYYY-MM-DD directly
+    return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+  }
+
+  function shiftDateKey(dateKey, deltaDays){
+    var parts = dateKey.split('-').map(Number);
+    var d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    d.setUTCDate(d.getUTCDate() + deltaDays);
+    var y = d.getUTCFullYear();
+    var m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    var day = String(d.getUTCDate()).padStart(2, '0');
+    return y + '-' + m + '-' + day;
+  }
+
+  // UTC epoch ms for 00:00:00 KST of the given YYYY-MM-DD date key.
+  // KST is a fixed UTC+9 offset (no DST), so this is safe year-round.
+  function kstMidnightUTCms(dateKey){
+    var parts = dateKey.split('-').map(Number);
+    return Date.UTC(parts[0], parts[1] - 1, parts[2], -9, 0, 0);
+  }
+
+  function buildBuckets(referenceMs){
+    var todayKey = getKSTDateKey(referenceMs);
+    var days = [];
+    for (var i = DAYS_COUNT - 1; i >= 0; i--){
+      days.push(shiftDateKey(todayKey, -i));
     }
-    return buckets;
+
+    var buckets = [];
+    for (var d = 0; d < days.length; d++){
+      var dayKey = days[d];
+      var midnight = kstMidnightUTCms(dayKey);
+      for (var b = 0; b < BUCKETS_PER_DAY; b++){
+        var bStart = midnight + b * BUCKET_HOURS * 3600 * 1000;
+        var bEnd = bStart + BUCKET_HOURS * 3600 * 1000;
+        buckets.push({ start: bStart, end: bEnd, dayKey: dayKey });
+      }
+    }
+    return { buckets: buckets, todayKey: todayKey, days: days };
+  }
+
+  // index of the bucket that contains `nowMs`, or the last bucket if none does
+  function currentBucketIndex(buckets, nowMs){
+    for (var i = 0; i < buckets.length; i++){
+      if (nowMs >= buckets[i].start && nowMs < buckets[i].end) return i;
+    }
+    return buckets.length - 1;
   }
 
   function fmtKSTHour(ms){
     return new Date(ms).toLocaleTimeString('ko-KR', {
       timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+  }
+
+  function fmtKSTDateHour(ms){
+    return new Date(ms).toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false
     });
   }
 
@@ -792,23 +867,27 @@
 
   function renderTicks(){
     el.tickRow.innerHTML = '';
+    var days = [];
     for (var i = 0; i < state.buckets.length; i++){
+      var dk = state.buckets[i].dayKey;
+      if (days.indexOf(dk) === -1) days.push(dk);
+    }
+    var selectedDayKey = state.buckets[state.selectedBucketIndex]
+      ? state.buckets[state.selectedBucketIndex].dayKey : null;
+
+    for (var d = 0; d < days.length; d++){
       var span = document.createElement('span');
-      span.textContent = fmtKSTHour(state.buckets[i].start).split(':')[0];
-      if (i === state.selectedBucketIndex) span.className = 'active';
+      var mmdd = days[d].slice(5).replace('-', '/');
+      span.textContent = (days[d] === state.todayKey) ? '오늘' : mmdd;
+      if (days[d] === selectedDayKey) span.className = 'active';
       el.tickRow.appendChild(span);
     }
-    // trailing "now" tick
-    var nowSpan = document.createElement('span');
-    nowSpan.textContent = '현재';
-    if (state.selectedBucketIndex === state.buckets.length - 1) nowSpan.className = 'active';
-    el.tickRow.appendChild(nowSpan);
   }
 
   function updateRangeLabel(){
     var b = state.buckets[state.selectedBucketIndex];
     if (!b) return;
-    el.rangeLabel.textContent = fmtKSTHour(b.start) + ' ~ ' + fmtKSTHour(b.end) + ' KST';
+    el.rangeLabel.textContent = fmtKSTDateHour(b.start) + ' ~ ' + fmtKSTDateHour(b.end) + ' KST';
   }
 
   function featuresInBucket(index){
@@ -921,24 +1000,24 @@
 
   // ============================================================
   // Daily records (localStorage) — independent of the live/current
-  // rolling-feed data shown on the globe. One record per KST calendar
-  // date, written once and never overwritten by later refreshes.
+  // 7-day feed shown on the globe. One record per KST calendar date,
+  // written once from the actually-counted features for that date,
+  // and never overwritten by later refreshes.
   // ============================================================
   var DAILY_RECORDS_KEY = 'usgs_daily_records';
+  var DAILY_HISTORY_DISPLAY_LIMIT = 7;
 
-  function getKSTDateKey(ms){
-    // en-CA locale gives YYYY-MM-DD directly
-    return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
-  }
-
-  function shiftDateKey(dateKey, deltaDays){
-    var parts = dateKey.split('-').map(Number);
-    var d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
-    d.setUTCDate(d.getUTCDate() + deltaDays);
-    var y = d.getUTCFullYear();
-    var m = String(d.getUTCMonth() + 1).padStart(2, '0');
-    var day = String(d.getUTCDate()).padStart(2, '0');
-    return y + '-' + m + '-' + day;
+  // Groups features by Asia/Seoul calendar date (derived from each
+  // feature's own properties.time), NOT from metadata.count.
+  function groupFeatureCountsByKSTDate(features){
+    var counts = {};
+    for (var i = 0; i < features.length; i++){
+      var t = features[i].properties && features[i].properties.time;
+      if (!Number.isFinite(t)) continue;
+      var dateKey = getKSTDateKey(t);
+      counts[dateKey] = (counts[dateKey] || 0) + 1;
+    }
+    return counts;
   }
 
   function loadDailyRecords(){
@@ -956,32 +1035,42 @@
       window.localStorage.setItem(DAILY_RECORDS_KEY, JSON.stringify(records));
     } catch (e){
       // storage unavailable (private mode, quota, etc.) — fail silently,
-      // the record still lives in memory for this session via `records`
+      // the records still live in memory for this session
     }
   }
 
-  // Ensures today's (KST) record exists. If it already exists, it is
-  // left untouched — the recorded count never changes after the fact,
-  // even if the live USGS feed's count changes on a later refresh.
-  function ensureTodayRecord(metadata){
+  // For every KST date present in the fetched 7-day feed, ensures a
+  // record exists using the actual per-day feature count. A date that
+  // already has a stored record is left completely untouched — this is
+  // what keeps "today" (and any day) stable across refreshes even as
+  // the live rolling feed's contents shift underneath it.
+  function ensureDailyRecords(dateCounts, metadata){
     var records = loadDailyRecords();
     var generatedMs = (metadata && Number.isFinite(metadata.generated)) ? metadata.generated : Date.now();
     var todayKey = getKSTDateKey(generatedMs);
-    var count = (metadata && Number.isFinite(metadata.count)) ? metadata.count : null;
+    var recordedAtIso = new Date().toISOString();
+    var sourceObservedAtIso = new Date(generatedMs).toISOString();
+    var changed = false;
 
-    var existing = null;
-    for (var i = 0; i < records.length; i++){
-      if (records[i].date === todayKey) { existing = records[i]; break; }
-    }
+    Object.keys(dateCounts).forEach(function(dateKey){
+      var existing = null;
+      for (var i = 0; i < records.length; i++){
+        if (records[i].date === dateKey) { existing = records[i]; break; }
+      }
+      if (!existing){
+        records.push({
+          date: dateKey,
+          count: dateCounts[dateKey],
+          source: USGS_URL,
+          sourceObservedAt: sourceObservedAtIso,
+          recordedAt: recordedAtIso
+        });
+        changed = true;
+      }
+    });
 
-    if (!existing && count !== null){
-      records.push({
-        date: todayKey,
-        count: count,
-        source: USGS_URL,
-        sourceObservedAt: new Date(generatedMs).toISOString(),
-        recordedAt: new Date().toISOString()
-      });
+    if (changed){
+      records.sort(function(a, b){ return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
       saveDailyRecords(records);
     }
 
@@ -1007,30 +1096,55 @@
       el.drYesterday.className = 'dr-value muted';
       el.drChange.textContent = '비교할 이전 기록이 없습니다.';
       el.drChange.className = 'dr-value muted';
-      return;
-    }
-
-    el.drYesterday.textContent = yesterday.count + '건';
-    el.drYesterday.className = 'dr-value';
-
-    if (!today){
-      el.drChange.textContent = '—';
-      el.drChange.className = 'dr-value muted';
-      return;
-    }
-
-    var diff = today.count - yesterday.count;
-    var sign = diff > 0 ? '+' : (diff < 0 ? '' : '±');
-    var cls = diff > 0 ? 'dr-value up' : (diff < 0 ? 'dr-value down' : 'dr-value');
-
-    if (yesterday.count === 0){
-      el.drChange.textContent = sign + diff + '건 (계산 불가)';
     } else {
-      var rate = (diff / yesterday.count) * 100;
-      var rateSign = rate > 0 ? '+' : (rate < 0 ? '' : '±');
-      el.drChange.textContent = sign + diff + '건 (' + rateSign + rate.toFixed(1) + '%)';
+      el.drYesterday.textContent = yesterday.count + '건';
+      el.drYesterday.className = 'dr-value';
+
+      if (!today){
+        el.drChange.textContent = '—';
+        el.drChange.className = 'dr-value muted';
+      } else {
+        var diff = today.count - yesterday.count;
+        var sign = diff > 0 ? '+' : (diff < 0 ? '' : '±');
+        var cls = diff > 0 ? 'dr-value up' : (diff < 0 ? 'dr-value down' : 'dr-value');
+
+        if (yesterday.count === 0){
+          el.drChange.textContent = sign + diff + '건 (계산 불가)';
+        } else {
+          var rate = (diff / yesterday.count) * 100;
+          var rateSign = rate > 0 ? '+' : (rate < 0 ? '' : '±');
+          el.drChange.textContent = sign + diff + '건 (' + rateSign + rate.toFixed(1) + '%)';
+        }
+        el.drChange.className = cls;
+      }
     }
-    el.drChange.className = cls;
+
+    renderDailyHistory(records, todayKey);
+  }
+
+  // Simple most-recent-first list of the last few days' records —
+  // no chart, just date + count, per the spec's minimal-UI request.
+  function renderDailyHistory(records, todayKey){
+    var sorted = records.slice().sort(function(a, b){
+      return a.date < b.date ? 1 : (a.date > b.date ? -1 : 0);
+    });
+    var shown = sorted.slice(0, DAILY_HISTORY_DISPLAY_LIMIT);
+
+    if (shown.length === 0){
+      el.drHistory.innerHTML = '';
+      return;
+    }
+
+    var html = '';
+    for (var i = 0; i < shown.length; i++){
+      var r = shown[i];
+      var mmdd = r.date.slice(5).replace('-', '/');
+      var isToday = r.date === todayKey;
+      html += '<div class="dr-hist-row' + (isToday ? ' today' : '') + '">' +
+        '<span class="dr-hist-date">' + mmdd + (isToday ? ' (오늘)' : '') + '</span>' +
+        '<span class="dr-hist-count">' + r.count + '</span></div>';
+    }
+    el.drHistory.innerHTML = html;
   }
 
   // ============================================================
@@ -1049,23 +1163,30 @@
       })
       .then(function(data){
         var features = (data && data.features) || [];
+        var metadata = data && data.metadata;
         state.allFeatures = features;
         state.fetchedAt = Date.now();
         state.loading = false;
 
-        state.buckets = buildBuckets(state.fetchedAt);
-        state.selectedBucketIndex = state.buckets.length - 1;
+        var built = buildBuckets(state.fetchedAt);
+        state.buckets = built.buckets;
+        state.todayKey = built.todayKey;
+        state.selectedBucketIndex = currentBucketIndex(built.buckets, state.fetchedAt);
         el.slider.max = String(state.buckets.length - 1);
         el.slider.value = String(state.selectedBucketIndex);
 
         hideOverlay();
+        var totalCount = (metadata && Number.isFinite(metadata.count)) ? metadata.count : features.length;
         setStatus('ok', 'USGS 연결됨 · ' + fmtKSTHour(state.fetchedAt) + ' 수신');
+        el.feedSubtitle.textContent = 'USGS M2.5+ · Past 7 Days · Total ' + totalCount + '건';
         applyBucketFilter();
 
-        // Daily record: independent of the live feed shown above —
-        // written once per KST calendar date, never overwritten by
-        // a later refresh's (possibly different) metadata.count.
-        var dr = ensureTodayRecord(data && data.metadata);
+        // Daily record: independent of the live 7-day feed shown above —
+        // grouped from each feature's own properties.time (KST date),
+        // NOT from metadata.count. Written once per date, never
+        // overwritten by a later refresh's shifted rolling window.
+        var dateCounts = groupFeatureCountsByKSTDate(features);
+        var dr = ensureDailyRecords(dateCounts, metadata);
         renderDailyRecord(dr.records, dr.todayKey);
       })
       .catch(function(err){
