@@ -544,7 +544,7 @@
     controls.dampingFactor = 0.08;
     controls.minDistance = 3.2;
     controls.maxDistance = 10;
-    controls.rotateSpeed = 0.45;
+    controls.rotateSpeed = 0.45; // overwritten dynamically per-frame based on zoom, see animate()
     controls.autoRotate = true;
     controls.autoRotateSpeed = 0.35;
 
@@ -726,14 +726,38 @@
     renderer.setSize(width, height);
   }
 
+  // Zoom-dependent tuning: as the camera gets closer to the globe,
+  // markers shrink (so the exact point stays visible) and drag-rotation
+  // slows down (so a small hand movement doesn't sweep across the view).
+  var ZOOM_REF_DISTANCE = 5.6;   // matches the initial camera distance
+  var MARKER_SCALE_MIN = 0.35;
+  var MARKER_SCALE_MAX = 1.8;
+  var ROTATE_SPEED_MIN = 0.12;  // at closest zoom (controls.minDistance)
+  var ROTATE_SPEED_MAX = 0.45;  // at farthest zoom (controls.maxDistance)
+
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
   function animate(){
     requestAnimationFrame(animate);
     pulseClock += 0.05;
 
-    if (selectedMesh){
-      var s = 1 + Math.sin(pulseClock * 4) * 0.35;
-      selectedMesh.scale.setScalar(s > 0 ? s : 1);
+    var distance = controls.getDistance ? controls.getDistance() : camera.position.length();
+
+    // marker size shrinks the closer the camera gets
+    var zoomScale = clamp(Math.pow(distance / ZOOM_REF_DISTANCE, 1.3), MARKER_SCALE_MIN, MARKER_SCALE_MAX);
+    for (var i = 0; i < markerMeshes.length; i++){
+      var m = markerMeshes[i].mesh;
+      if (m === selectedMesh){
+        var pulse = 1 + Math.sin(pulseClock * 4) * 0.35;
+        m.scale.setScalar(zoomScale * (pulse > 0 ? pulse : 1));
+      } else {
+        m.scale.setScalar(zoomScale);
+      }
     }
+
+    // drag-rotation slows down the closer the camera gets
+    var t = clamp((distance - controls.minDistance) / (controls.maxDistance - controls.minDistance), 0, 1);
+    controls.rotateSpeed = ROTATE_SPEED_MIN + t * (ROTATE_SPEED_MAX - ROTATE_SPEED_MIN);
 
     controls.update();
     renderer.render(scene, camera);
