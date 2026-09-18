@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EARTHQUAKE DASHBOARD — 실시간 지진 관측</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #090c12;
+    --bg-deep: #04060a;
+    --panel: #10141d;
+    --panel-2: #141a25;
+    --border: #232b3a;
+    --border-soft: #1a2029;
+    --text: #e7ebf3;
+    --text-dim: #8791a3;
+    --text-faint: #545f72;
+    --accent: #49d6c8;
+    --accent-dim: #1f4a48;
+    --mag-1: #4ade80;
+    --mag-2: #f2c94c;
+    --mag-3: #f2994a;
+    --mag-4: #eb5757;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --sans: 'IBM Plex Sans KR', 'IBM Plex Sans', system-ui, sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{
+    height:100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow:hidden;
+  }
+  #app{
+    display:flex;
+    flex-direction:column;
+    height:100vh;
+    width:100vw;
+  }
+
+  /* ---------- Header ---------- */
+  header{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    padding: 18px 28px 14px;
+    border-bottom: 1px solid var(--border-soft);
+    flex-shrink:0;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .title-block{
+    display:flex;
+    align-items:baseline;
+    gap: 14px;
+  }
+  h1{
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--text);
+  }
+  .subtitle{
+    font-size: 12px;
+    color: var(--text-faint);
+    font-family: var(--mono);
+  }
+  .status-block{
+    display:flex;
+    align-items:center;
+    gap: 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .status-dot{
+    width:7px; height:7px; border-radius:50%;
+    display:inline-block;
+    margin-right:6px;
+    background: var(--text-faint);
+  }
+  .status-dot.ok{ background: var(--mag-1); box-shadow: 0 0 8px var(--mag-1); }
+  .status-dot.err{ background: var(--mag-4); box-shadow: 0 0 8px var(--mag-4); }
+  .status-dot.loading{ background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+  /* ---------- Main layout ---------- */
+  main{
+    flex: 1;
+    display:flex;
+    min-height:0;
+    position:relative;
+  }
+  #globe-wrap{
+    flex: 1;
+    position:relative;
+    min-width:0;
+  }
+  #globe-canvas{
+    width:100%;
+    height:100%;
+    display:block;
+    cursor: grab;
+  }
+  #globe-canvas:active{ cursor: grabbing; }
+
+  .globe-hint{
+    position:absolute;
+    bottom: 16px;
+    left: 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    letter-spacing: 0.03em;
+    pointer-events:none;
+  }
+  .legend{
+    position:absolute;
+    top: 18px;
+    left: 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    background: rgba(9,12,18,0.55);
+    padding: 10px 12px;
+    border: 1px solid var(--border-soft);
+    border-radius: 3px;
+    backdrop-filter: blur(4px);
+  }
+  .legend-row{ display:flex; align-items:center; gap:8px; }
+  .legend-dot{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
+  #overlay{
+    position:absolute;
+    inset:0;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    gap: 14px;
+    background: rgba(4,6,10,0.72);
+    backdrop-filter: blur(2px);
+    z-index: 5;
+    text-align:center;
+    padding: 20px;
+  }
+  #overlay.show{ display:flex; }
+  #overlay .glyph{
+    width: 34px; height:34px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius:50%;
+    animation: spin 0.9s linear infinite;
+  }
+  #overlay.error .glyph{
+    border: none;
+    font-size: 30px;
+    animation: none;
+    width:auto; height:auto;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+  #overlay p{
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-dim);
+    max-width: 320px;
+    line-height:1.6;
+  }
+  #overlay button{
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--bg);
+    background: var(--accent);
+    border:none;
+    padding: 8px 18px;
+    border-radius: 3px;
+    cursor:pointer;
+    letter-spacing:0.03em;
+  }
+  #overlay button:hover{ filter: brightness(1.1); }
+
+  /* ---------- Detail panel ---------- */
+  #panel{
+    width: 320px;
+    flex-shrink:0;
+    background: var(--panel);
+    border-left: 1px solid var(--border-soft);
+    padding: 22px 22px 24px;
+    overflow-y:auto;
+  }
+  .panel-eyebrow{
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 14px;
+  }
+  .panel-empty{
+    color: var(--text-faint);
+    font-size: 13px;
+    line-height:1.7;
+    padding-top: 40px;
+    text-align:center;
+  }
+  .mag-display{
+    font-family: var(--mono);
+    font-size: 46px;
+    font-weight: 700;
+    line-height:1;
+    margin-bottom: 6px;
+  }
+  .place-display{
+    font-size: 15px;
+    color: var(--text);
+    line-height:1.5;
+    margin-bottom: 22px;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .field-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-soft);
+    gap: 10px;
+  }
+  .field-label{
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    letter-spacing: 0.04em;
+    flex-shrink:0;
+  }
+  .field-value{
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    text-align:right;
+  }
+  .tsunami-yes{ color: var(--mag-4); }
+  .usgs-link{
+    display:block;
+    margin-top: 22px;
+    text-align:center;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--bg);
+    background: var(--accent);
+    text-decoration:none;
+    padding: 11px;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+    transition: filter 0.15s;
+  }
+  .usgs-link:hover{ filter: brightness(1.12); }
+
+  /* ---------- Time slider footer ---------- */
+  footer{
+    flex-shrink:0;
+    border-top: 1px solid var(--border-soft);
+    background: var(--panel);
+    padding: 16px 28px 18px;
+  }
+  .slider-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    letter-spacing: 0.04em;
+  }
+  #range-label{ color: var(--accent); }
+  .slider-track-wrap{
+    position:relative;
+    padding: 0 2px;
+  }
+  #time-slider{
+    width:100%;
+    appearance:none;
+    -webkit-appearance:none;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    outline:none;
+    margin: 14px 0 6px;
+  }
+  #time-slider::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width: 15px; height:15px;
+    border-radius:50%;
+    background: var(--accent);
+    border: 3px solid var(--bg);
+    box-shadow: 0 0 0 1px var(--accent);
+    cursor:pointer;
+    margin-top: -6px;
+  }
+  #time-slider::-moz-range-thumb{
+    width: 15px; height:15px;
+    border-radius:50%;
+    background: var(--accent);
+    border: 3px solid var(--bg);
+    box-shadow: 0 0 0 1px var(--accent);
+    cursor:pointer;
+  }
+  .tick-row{
+    display:flex;
+    justify-content:space-between;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-faint);
+  }
+  .tick-row span{ min-width: 24px; text-align:center; }
+  .tick-row span.active{ color: var(--accent); font-weight:600; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 860px){
+    header{ padding: 14px 16px 12px; }
+    h1{ font-size: 15px; }
+    .status-block{ font-size: 10.5px; gap: 10px; }
+    main{ flex-direction:column; overflow-y:auto; }
+    #globe-wrap{ height: 46vh; flex: none; }
+    #panel{
+      width:100%;
+      border-left:none;
+      border-top: 1px solid var(--border-soft);
+      max-height: none;
+    }
+    footer{ padding: 14px 16px 16px; }
+    .mag-display{ font-size: 38px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="title-block">
+      <h1>EARTHQUAKE DASHBOARD</h1>
+      <span class="subtitle">USGS M2.5+ · 지난 24시간</span>
+    </div>
+    <div class="status-block">
+      <span id="status-fetch"><span class="status-dot" id="status-dot"></span><span id="status-text">연결 중…</span></span>
+      <span id="status-count">이벤트 0건</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="globe-wrap">
+      <canvas id="globe-canvas"></canvas>
+
+      <div class="legend">
+        <div class="legend-row"><span class="legend-dot" style="background:var(--mag-1)"></span>M &lt; 3.0</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--mag-2)"></span>M 3.0–3.9</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--mag-3)"></span>M 4.0–4.9</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--mag-4)"></span>M 5.0+</div>
+      </div>
+
+      <div class="globe-hint">드래그로 회전 · 스크롤로 확대 · 마커 클릭으로 상세 정보</div>
+
+      <div id="overlay">
+        <div class="glyph" id="overlay-glyph"></div>
+        <p id="overlay-text">USGS에서 지진 데이터를 불러오는 중입니다…</p>
+        <button id="overlay-retry" style="display:none;">다시 시도</button>
+      </div>
+    </div>
+
+    <aside id="panel">
+      <div class="panel-eyebrow">EARTHQUAKE</div>
+      <div id="panel-body">
+        <div class="panel-empty">지구본에서 지진 마커를 클릭하면<br>상세 정보가 여기에 표시됩니다.</div>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <div class="slider-head">
+      <span id="slider-window-label">시간대 필터 · 3시간 단위</span>
+      <span id="range-label">— : — ~ — : —</span>
+    </div>
+    <div class="slider-track-wrap">
+      <input type="range" id="time-slider" min="0" max="7" step="1" value="7">
+      <div class="tick-row" id="tick-row"></div>
+    </div>
+  </footer>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // ============================================================
+  // Config
+  // ============================================================
+  var USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson";
+  var GLOBE_RADIUS = 2;
+  var BUCKET_HOURS = 3;
+  var BUCKET_COUNT = 8; // 24h / 3h
+
+  var COLORS = {
+    magLow:   0x4ade80,
+    magMid:   0xf2c94c,
+    magHigh:  0xf2994a,
+    magSevere:0xeb5757,
+    grid:     0x233043,
+    ocean:    0x0d131e
+  };
+
+  // ============================================================
+  // State
+  // ============================================================
+  var state = {
+    allFeatures: [],      // full USGS features, untouched, in memory
+    fetchedAt: null,
+    buckets: [],           // [{start, end}, ...] boundaries in ms epoch
+    selectedBucketIndex: BUCKET_COUNT - 1,
+    selectedId: null,
+    loading: true,
+    error: null
+  };
+
+  // ============================================================
+  // DOM refs
+  // ============================================================
+  var el = {
+    canvas: document.getElementById('globe-canvas'),
+    overlay: document.getElementById('overlay'),
+    overlayGlyph: document.getElementById('overlay-glyph'),
+    overlayText: document.getElementById('overlay-text'),
+    overlayRetry: document.getElementById('overlay-retry'),
+    statusDot: document.getElementById('status-dot'),
+    statusText: document.getElementById('status-text'),
+    statusCount: document.getElementById('status-count'),
+    panelBody: document.getElementById('panel-body'),
+    slider: document.getElementById('time-slider'),
+    rangeLabel: document.getElementById('range-label'),
+    tickRow: document.getElementById('tick-row'),
+    globeWrap: document.getElementById('globe-wrap')
+  };
+
+  // ============================================================
+  // Three.js scene setup
+  // ============================================================
+  var scene, camera, renderer, controls, raycaster, mouse;
+  var markerGroup, globeMesh;
+  var markerMeshes = []; // { mesh, feature }
+  var selectedMesh = null;
+  var pulseClock = 0;
+
+  function initScene(){
+    scene = new THREE.Scene();
+
+    var width = el.globeWrap.clientWidth;
+    var height = el.globeWrap.clientHeight;
+
+    camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+    camera.position.set(0, 0, 5.6);
+
+    renderer = new THREE.WebGLRenderer({ canvas: el.canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(width, height);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 3.2;
+    controls.maxDistance = 10;
+    controls.rotateSpeed = 0.45;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.35;
+
+    // ambient + directional light (subtle, mostly for depth cue on markers)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    var dir = new THREE.DirectionalLight(0xffffff, 0.4);
+    dir.position.set(5, 3, 5);
+    scene.add(dir);
+
+    buildGlobe();
+
+    markerGroup = new THREE.Group();
+    scene.add(markerGroup);
+
+    raycaster = new THREE.Raycaster();
+    raycaster.params.Points = { threshold: 0.05 };
+    mouse = new THREE.Vector2();
+
+    el.canvas.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('resize', onResize);
+
+    animate();
+  }
+
+  // Public equirectangular earth textures (day map + bump).
+  // Loaded at runtime by the viewer's browser, same as the USGS data fetch.
+  var EARTH_TEXTURE_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg";
+  var EARTH_BUMP_URL = "https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-topology.png";
+
+  function buildGlobe(){
+    // solid inner sphere, starts as a flat color and upgrades to a real
+    // earth texture once it loads (so the globe is never blank while waiting)
+    var sphereGeo = new THREE.SphereGeometry(GLOBE_RADIUS * 0.995, 64, 40);
+    var sphereMat = new THREE.MeshPhongMaterial({
+      color: COLORS.ocean,
+      shininess: 5
+    });
+    globeMesh = new THREE.Mesh(sphereGeo, sphereMat);
+    scene.add(globeMesh);
+
+    var loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    loader.load(EARTH_TEXTURE_URL, function(tex){
+      sphereMat.map = tex;
+      sphereMat.color.set(0xffffff);
+      sphereMat.needsUpdate = true;
+    }, undefined, function(){
+      // texture failed to load (e.g. offline) — keep the flat-color fallback
+    });
+    loader.load(EARTH_BUMP_URL, function(tex){
+      sphereMat.bumpMap = tex;
+      sphereMat.bumpScale = 0.02;
+      sphereMat.needsUpdate = true;
+    }, undefined, function(){ /* bump map is optional, ignore failure */ });
+
+    // lat/long wireframe grid — now just a faint coordinate reference
+    // sitting on top of the map, not the main visual
+    var wireGeo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.001, 24, 16);
+    var wireMat = new THREE.MeshBasicMaterial({
+      color: COLORS.grid,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.12
+    });
+    var wireMesh = new THREE.Mesh(wireGeo, wireMat);
+    scene.add(wireMesh);
+
+    // faint outer glow shell
+    var glowGeo = new THREE.SphereGeometry(GLOBE_RADIUS * 1.025, 32, 22);
+    var glowMat = new THREE.MeshBasicMaterial({
+      color: 0x49d6c8,
+      transparent: true,
+      opacity: 0.05,
+      side: THREE.BackSide
+    });
+    scene.add(new THREE.Mesh(glowGeo, glowMat));
+  }
+
+  function latLonToVector3(lat, lon, radius){
+    var phi = (90 - lat) * (Math.PI / 180);
+    var theta = (lon + 180) * (Math.PI / 180);
+    var x = -(radius * Math.sin(phi) * Math.cos(theta));
+    var y = radius * Math.cos(phi);
+    var z = (radius * Math.sin(phi) * Math.sin(theta));
+    return new THREE.Vector3(x, y, z);
+  }
+
+  function markerRadius(mag){
+    var m = Number.isFinite(mag) ? mag : 0;
+    var clamped = Math.max(0, m);
+    var r = 0.018 + clamped * 0.012;
+    if (!Number.isFinite(r) || r <= 0) r = 0.018;
+    return Math.min(r, 0.12);
+  }
+
+  function markerColor(mag){
+    var m = Number.isFinite(mag) ? mag : -Infinity;
+    if (m < 3) return COLORS.magLow;
+    if (m < 4) return COLORS.magMid;
+    if (m < 5) return COLORS.magHigh;
+    return COLORS.magSevere;
+  }
+
+  function clearMarkers(){
+    for (var i = 0; i < markerMeshes.length; i++){
+      markerGroup.remove(markerMeshes[i].mesh);
+      markerMeshes[i].mesh.geometry.dispose();
+      markerMeshes[i].mesh.material.dispose();
+    }
+    markerMeshes = [];
+    selectedMesh = null;
+  }
+
+  function renderMarkers(features){
+    clearMarkers();
+
+    for (var i = 0; i < features.length; i++){
+      var f = features[i];
+      var coords = f.geometry && f.geometry.coordinates;
+      if (!coords || coords.length < 2) continue;
+
+      var lon = coords[0], lat = coords[1];
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+
+      var mag = f.properties ? f.properties.mag : null;
+      var r = markerRadius(mag);
+      var color = markerColor(mag);
+
+      var geo = new THREE.SphereGeometry(r, 12, 10);
+      var mat = new THREE.MeshBasicMaterial({ color: color });
+      var mesh = new THREE.Mesh(geo, mat);
+
+      var pos = latLonToVector3(lat, lon, GLOBE_RADIUS + 0.012);
+      mesh.position.copy(pos);
+      mesh.userData.baseScale = 1;
+
+      markerGroup.add(mesh);
+      markerMeshes.push({ mesh: mesh, feature: f });
+
+      if (f.id === state.selectedId){
+        selectedMesh = mesh;
+      }
+    }
+  }
+
+  function onPointerDown(evt){
+    var rect = el.canvas.getBoundingClientRect();
+    mouse.x = ((evt.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((evt.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    var hits = raycaster.intersectObjects(markerGroup.children);
+    if (hits.length > 0){
+      var hitMesh = hits[0].object;
+      var found = null;
+      for (var i = 0; i < markerMeshes.length; i++){
+        if (markerMeshes[i].mesh === hitMesh){ found = markerMeshes[i]; break; }
+      }
+      if (found){
+        controls.autoRotate = false;
+        selectFeature(found.feature, hitMesh);
+      }
+    }
+  }
+
+  function selectFeature(feature, mesh){
+    state.selectedId = feature.id;
+    selectedMesh = mesh || null;
+    updateDetailPanel(feature);
+  }
+
+  function onResize(){
+    var width = el.globeWrap.clientWidth;
+    var height = el.globeWrap.clientHeight;
+    if (width === 0 || height === 0) return;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
+  }
+
+  function animate(){
+    requestAnimationFrame(animate);
+    pulseClock += 0.05;
+
+    if (selectedMesh){
+      var s = 1 + Math.sin(pulseClock * 4) * 0.35;
+      selectedMesh.scale.setScalar(s > 0 ? s : 1);
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  // ============================================================
+  // Time buckets
+  // ============================================================
+  function buildBuckets(nowMs){
+    var start = nowMs - 24 * 3600 * 1000;
+    var buckets = [];
+    for (var i = 0; i < BUCKET_COUNT; i++){
+      var bStart = start + i * BUCKET_HOURS * 3600 * 1000;
+      var bEnd = bStart + BUCKET_HOURS * 3600 * 1000;
+      buckets.push({ start: bStart, end: bEnd });
+    }
+    return buckets;
+  }
+
+  function fmtKSTHour(ms){
+    return new Date(ms).toLocaleTimeString('ko-KR', {
+      timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+  }
+
+  function fmtKSTFull(ms){
+    return new Date(ms).toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    }) + ' KST';
+  }
+
+  function renderTicks(){
+    el.tickRow.innerHTML = '';
+    for (var i = 0; i < state.buckets.length; i++){
+      var span = document.createElement('span');
+      span.textContent = fmtKSTHour(state.buckets[i].start).split(':')[0];
+      if (i === state.selectedBucketIndex) span.className = 'active';
+      el.tickRow.appendChild(span);
+    }
+    // trailing "now" tick
+    var nowSpan = document.createElement('span');
+    nowSpan.textContent = '현재';
+    if (state.selectedBucketIndex === state.buckets.length - 1) nowSpan.className = 'active';
+    el.tickRow.appendChild(nowSpan);
+  }
+
+  function updateRangeLabel(){
+    var b = state.buckets[state.selectedBucketIndex];
+    if (!b) return;
+    el.rangeLabel.textContent = fmtKSTHour(b.start) + ' ~ ' + fmtKSTHour(b.end) + ' KST';
+  }
+
+  function featuresInBucket(index){
+    var b = state.buckets[index];
+    if (!b) return [];
+    return state.allFeatures.filter(function(f){
+      var t = f.properties && f.properties.time;
+      return Number.isFinite(t) && t >= b.start && t < b.end;
+    });
+  }
+
+  function applyBucketFilter(){
+    renderTicks();
+    updateRangeLabel();
+    var feats = featuresInBucket(state.selectedBucketIndex);
+    renderMarkers(feats);
+    updateCountStatus(feats.length);
+
+    if (feats.length === 0){
+      showEmptyPanelMessage();
+    }
+  }
+
+  function showEmptyPanelMessage(){
+    if (state.selectedId) return; // keep detail panel if something is already selected
+    el.panelBody.innerHTML = '<div class="panel-empty">선택한 시간대에 관측된<br>지진이 없습니다.</div>';
+  }
+
+  // ============================================================
+  // Detail panel
+  // ============================================================
+  function updateDetailPanel(feature){
+    var p = feature.properties || {};
+    var coords = (feature.geometry && feature.geometry.coordinates) || [];
+    var lon = coords[0], lat = coords[1], depth = coords[2];
+
+    var magText = Number.isFinite(p.mag) ? p.mag.toFixed(1) : 'N/A';
+    var placeText = p.place || '위치 정보 없음';
+    var timeText = Number.isFinite(p.time) ? fmtKSTFull(p.time) : 'N/A';
+    var updatedText = Number.isFinite(p.updated) ? fmtKSTFull(p.updated) : 'N/A';
+    var depthText = Number.isFinite(depth) ? depth.toFixed(1) + ' km' : 'N/A';
+    var latText = Number.isFinite(lat) ? lat.toFixed(4) : 'N/A';
+    var lonText = Number.isFinite(lon) ? lon.toFixed(4) : 'N/A';
+    var magTypeText = p.magType || 'N/A';
+    var statusText = p.status || 'N/A';
+    var tsunamiOn = p.tsunami === 1;
+    var url = p.url || p.detail || null;
+
+    var html = '';
+    html += '<div class="mag-display">M ' + magText + '</div>';
+    html += '<div class="place-display">' + escapeHtml(placeText) + '</div>';
+
+    html += fieldRow('발생 시간', timeText);
+    html += fieldRow('업데이트', updatedText);
+    html += fieldRow('깊이', depthText);
+    html += fieldRow('위도', latText);
+    html += fieldRow('경도', lonText);
+    html += fieldRow('Magnitude Type', magTypeText);
+    html += fieldRow('Status', statusText);
+    html += fieldRow('Tsunami', tsunamiOn ? '<span class="tsunami-yes">Yes</span>' : 'No', true);
+
+    if (url){
+      html += '<a class="usgs-link" href="' + encodeURI(url) + '" target="_blank" rel="noopener noreferrer">View on USGS →</a>';
+    }
+
+    el.panelBody.innerHTML = html;
+  }
+
+  function fieldRow(label, value, rawHtml){
+    return '<div class="field-row"><span class="field-label">' + escapeHtml(label) +
+      '</span><span class="field-value">' + (rawHtml ? value : escapeHtml(String(value))) + '</span></div>';
+  }
+
+  function escapeHtml(str){
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ============================================================
+  // Status / overlay UI
+  // ============================================================
+  function setStatus(kind, text){
+    el.statusDot.className = 'status-dot' + (kind ? ' ' + kind : '');
+    el.statusText.textContent = text;
+  }
+
+  function updateCountStatus(n){
+    el.statusCount.textContent = '이벤트 ' + n + '건';
+  }
+
+  function showOverlayLoading(){
+    el.overlay.className = 'show';
+    el.overlayGlyph.style.display = '';
+    el.overlayGlyph.textContent = '';
+    el.overlayText.textContent = 'USGS에서 지진 데이터를 불러오는 중입니다…';
+    el.overlayRetry.style.display = 'none';
+  }
+
+  function showOverlayError(){
+    el.overlay.className = 'show error';
+    el.overlayGlyph.style.display = 'none';
+    el.overlayText.textContent = '지진 데이터를 불러오지 못했습니다.\n잠시 후 다시 시도해주세요.';
+    el.overlayRetry.style.display = 'inline-block';
+  }
+
+  function hideOverlay(){
+    el.overlay.className = '';
+  }
+
+  // ============================================================
+  // Data fetch
+  // ============================================================
+  function fetchData(){
+    state.loading = true;
+    state.error = null;
+    setStatus('loading', '연결 중…');
+    showOverlayLoading();
+
+    fetch(USGS_URL)
+      .then(function(res){
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function(data){
+        var features = (data && data.features) || [];
+        state.allFeatures = features;
+        state.fetchedAt = Date.now();
+        state.loading = false;
+
+        state.buckets = buildBuckets(state.fetchedAt);
+        state.selectedBucketIndex = state.buckets.length - 1;
+        el.slider.max = String(state.buckets.length - 1);
+        el.slider.value = String(state.selectedBucketIndex);
+
+        hideOverlay();
+        setStatus('ok', 'USGS 연결됨 · ' + fmtKSTHour(state.fetchedAt) + ' 수신');
+        applyBucketFilter();
+      })
+      .catch(function(err){
+        state.loading = false;
+        state.error = err;
+        setStatus('err', '연결 실패');
+        showOverlayError();
+      });
+  }
+
+  // ============================================================
+  // Wire up slider
+  // ============================================================
+  el.slider.addEventListener('input', function(){
+    state.selectedBucketIndex = parseInt(el.slider.value, 10);
+    state.selectedId = null; // clear selection when the visible set changes
+    applyBucketFilter();
+  });
+
+  el.overlayRetry.addEventListener('click', function(){
+    fetchData();
+  });
+
+  // ============================================================
+  // Boot
+  // ============================================================
+  initScene();
+  fetchData();
+
+})();
+</script>
+</body>
+</html>
