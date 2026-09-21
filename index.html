@@ -58,6 +58,8 @@
     display:flex;
     align-items:baseline;
     gap: 14px;
+    flex-wrap: wrap;
+    row-gap: 4px;
   }
   h1{
     font-family: var(--mono);
@@ -74,7 +76,9 @@
   .status-block{
     display:flex;
     align-items:center;
-    gap: 18px;
+    gap: 14px;
+    flex-wrap: wrap;
+    row-gap: 8px;
     font-family: var(--mono);
     font-size: 12px;
     color: var(--text-dim);
@@ -89,6 +93,100 @@
   .status-dot.err{ background: var(--mag-4); box-shadow: 0 0 8px var(--mag-4); }
   .status-dot.loading{ background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.1s ease-in-out infinite; }
   @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+  .source-link{
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--text-faint);
+  }
+  .source-link:hover{ color: var(--accent); border-bottom-color: var(--accent); }
+
+  .stale-badge{
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--bg);
+    background: var(--mag-3);
+    padding: 3px 7px;
+    border-radius: 2px;
+  }
+
+  .test-panel-wrap{ position:relative; }
+  .test-toggle-btn{
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    padding: 5px 9px;
+    border-radius: 3px;
+    cursor:pointer;
+  }
+  .test-toggle-btn:hover{ border-color: var(--accent); color: var(--accent); }
+  .test-panel{
+    position:absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 220px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    z-index: 20;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .test-panel-title{
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+  .fixture-opt{
+    display:block;
+    width:100%;
+    text-align:left;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 7px 8px;
+    margin-bottom: 2px;
+    cursor:pointer;
+  }
+  .fixture-opt:hover{ background: var(--panel); color: var(--text); }
+  .fixture-opt.active{ color: var(--accent); border-color: var(--accent-dim); background: rgba(73,214,200,0.08); }
+
+  .error-banner{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap: 14px;
+    padding: 9px 28px;
+    background: rgba(235,87,87,0.12);
+    border-bottom: 1px solid rgba(235,87,87,0.35);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #f6b8b8;
+    flex-shrink:0;
+  }
+  .error-banner button{
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--bg);
+    background: var(--accent);
+    border:none;
+    padding: 6px 14px;
+    border-radius: 3px;
+    cursor:pointer;
+    flex-shrink:0;
+  }
 
   /* ---------- Main layout ---------- */
   main{
@@ -412,12 +510,32 @@
     <div class="title-block">
       <h1>EARTHQUAKE DASHBOARD</h1>
       <span class="subtitle" id="feed-subtitle">USGS M2.5+ · 최근 7일 데이터 불러오는 중…</span>
+      <a class="source-link" id="source-link" href="https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson" target="_blank" rel="noopener noreferrer">Source: USGS Earthquake Hazards Program ↗</a>
     </div>
     <div class="status-block">
+      <span class="stale-badge" id="stale-badge" style="display:none;">STALE</span>
       <span id="status-fetch"><span class="status-dot" id="status-dot"></span><span id="status-text">연결 중…</span></span>
       <span id="status-count">이벤트 0건</span>
+      <div class="test-panel-wrap">
+        <button id="test-toggle" class="test-toggle-btn" type="button">TEST</button>
+        <div id="test-panel" class="test-panel" style="display:none;">
+          <div class="test-panel-title">Fixture / Test Mode</div>
+          <button data-fixture="normal" class="fixture-opt active">정상 (실제 API)</button>
+          <button data-fixture="slow" class="fixture-opt">느린 응답 (Slow)</button>
+          <button data-fixture="401" class="fixture-opt">401 Unauthorized</button>
+          <button data-fixture="403" class="fixture-opt">403 Forbidden</button>
+          <button data-fixture="ratelimit" class="fixture-opt">429 Rate Limit</button>
+          <button data-fixture="offline" class="fixture-opt">Offline / Network Fail</button>
+          <button data-fixture="schema" class="fixture-opt">Schema Change</button>
+        </div>
+      </div>
     </div>
   </header>
+
+  <div id="error-banner" class="error-banner" style="display:none;">
+    <span id="error-banner-text"></span>
+    <button id="error-banner-retry" type="button">다시 시도</button>
+  </div>
 
   <main>
     <div id="globe-wrap">
@@ -517,7 +635,9 @@
     todayKey: null,        // Asia/Seoul date key of "today", set on fetch
     selectedId: null,
     loading: true,
-    error: null
+    error: null,
+    stale: false,          // true when a refresh failed but old data is still shown
+    activeFixture: 'normal'
   };
 
   // ============================================================
@@ -542,7 +662,13 @@
     drChange: document.getElementById('dr-change'),
     drFootnote: document.getElementById('dr-footnote'),
     drHistory: document.getElementById('dr-history'),
-    feedSubtitle: document.getElementById('feed-subtitle')
+    feedSubtitle: document.getElementById('feed-subtitle'),
+    staleBadge: document.getElementById('stale-badge'),
+    testToggle: document.getElementById('test-toggle'),
+    testPanel: document.getElementById('test-panel'),
+    errorBanner: document.getElementById('error-banner'),
+    errorBannerText: document.getElementById('error-banner-text'),
+    errorBannerRetry: document.getElementById('error-banner-retry')
   };
 
   // ============================================================
@@ -970,13 +1096,21 @@
   // ============================================================
   // Status / overlay UI
   // ============================================================
+  var ERROR_TYPES = {
+    OFFLINE:    { label: 'OFFLINE',    text: '네트워크에 연결할 수 없습니다.\n인터넷 연결을 확인한 뒤 다시 시도해주세요.' },
+    AUTH:       { label: '401/403',    text: 'API 접근 권한이 없습니다 (401/403).\n인증 상태를 확인해주세요.' },
+    RATE_LIMIT: { label: 'RATE LIMIT', text: '요청이 너무 많습니다 (429 Rate Limit).\n잠시 후 다시 시도해주세요.' },
+    SCHEMA:     { label: 'SCHEMA',     text: 'API 응답 형식이 예상과 다릅니다 (Schema Change).\n데이터 구조가 변경되었을 수 있습니다.' },
+    UNKNOWN:    { label: 'ERROR',      text: '지진 데이터를 불러오지 못했습니다.\n잠시 후 다시 시도해주세요.' }
+  };
+
   function setStatus(kind, text){
     el.statusDot.className = 'status-dot' + (kind ? ' ' + kind : '');
     el.statusText.textContent = text;
   }
 
   function updateCountStatus(n){
-    el.statusCount.textContent = '이벤트 ' + n + '건';
+    el.statusCount.textContent = '표시 중 ' + n + '건';
   }
 
   function showOverlayLoading(){
@@ -987,15 +1121,36 @@
     el.overlayRetry.style.display = 'none';
   }
 
-  function showOverlayError(){
+  // shown only when there is NO previously-good data to fall back on
+  // (i.e. this is the very first load and it failed)
+  function showOverlayError(errorType){
+    var info = ERROR_TYPES[errorType] || ERROR_TYPES.UNKNOWN;
     el.overlay.className = 'show error';
     el.overlayGlyph.style.display = 'none';
-    el.overlayText.textContent = '지진 데이터를 불러오지 못했습니다.\n잠시 후 다시 시도해주세요.';
+    el.overlayText.textContent = '[' + info.label + '] ' + info.text;
     el.overlayRetry.style.display = 'inline-block';
   }
 
   function hideOverlay(){
     el.overlay.className = '';
+  }
+
+  // shown when a REFRESH (not the first load) fails — keeps whatever
+  // is already on screen (globe/markers/panel) untouched and just
+  // flags that it's no longer fresh (C17 + C18)
+  function showStale(errorType){
+    var info = ERROR_TYPES[errorType] || ERROR_TYPES.UNKNOWN;
+    state.stale = true;
+    el.staleBadge.style.display = 'inline-block';
+    el.errorBanner.style.display = 'flex';
+    el.errorBannerText.textContent = '[' + info.label + '] ' + info.text.replace('\n', ' ') +
+      ' (마지막 정상 데이터: ' + fmtKSTHour(state.fetchedAt) + ')';
+  }
+
+  function clearStale(){
+    state.stale = false;
+    el.staleBadge.style.display = 'none';
+    el.errorBanner.style.display = 'none';
   }
 
   // ============================================================
@@ -1120,6 +1275,20 @@
     }
 
     renderDailyHistory(records, todayKey);
+    renderDailyProvenance(today);
+  }
+
+  // C23: surface the stored record's source/observation time on screen
+  // (not just in localStorage) so stored vs. displayed values can be
+  // visually cross-checked.
+  function renderDailyProvenance(todayRecord){
+    if (!todayRecord){
+      el.drFootnote.textContent = '기준 · M2.5+ / 날짜별(KST) 집계';
+      return;
+    }
+    var observedText = todayRecord.sourceObservedAt ? fmtKSTFull(Date.parse(todayRecord.sourceObservedAt)) : 'N/A';
+    var hostText = 'earthquake.usgs.gov';
+    el.drFootnote.innerHTML = '기준 · M2.5+ / 날짜별(KST) 집계<br>출처 · ' + hostText + ' · 관측 ' + observedText;
   }
 
   // Simple most-recent-first list of the last few days' records —
@@ -1148,25 +1317,131 @@
   }
 
   // ============================================================
+  // Fixture / test-mode support (C12–C16, C26)
+  // Produces synthetic data or synthetic errors LOCALLY — never
+  // hits or degrades the real USGS service. Used to reproducibly
+  // test each failure/edge state from the TEST panel in the header.
+  // ============================================================
+  function buildSyntheticFeatureCollection(nowMs){
+    // A handful of made-up events spread across the last few days,
+    // shaped exactly like a real USGS FeatureCollection.
+    var f = [];
+    var offsets = [1, 5, 20, 30, 50, 70, 90, 110]; // hours ago
+    var mags = [2.6, 3.4, 4.1, 5.2, 3.0, 2.8, 4.6, 3.9];
+    var places = [
+      '10 km SSW of Test City, CA', '50 km NE of Sample Bay, Japan',
+      '120 km W of Fixture Island', '5 km N of Synthetic Ridge',
+      '80 km SE of Demo Trench', '15 km S of Mock Valley',
+      '200 km NW of Placeholder Sea', '30 km E of QA Springs'
+    ];
+    for (var i = 0; i < offsets.length; i++){
+      var t = nowMs - offsets[i] * 3600 * 1000;
+      f.push({
+        type: 'Feature',
+        id: 'synthetic-' + i,
+        properties: {
+          mag: mags[i], place: places[i], time: t, updated: t,
+          magType: 'md', status: 'reviewed', tsunami: 0,
+          url: 'https://earthquake.usgs.gov/earthquakes/eventpage/synthetic' + i
+        },
+        geometry: { type: 'Point', coordinates: [((i * 37) % 360) - 180, ((i * 23) % 160) - 80, 10] }
+      });
+    }
+    return {
+      type: 'FeatureCollection',
+      metadata: { generated: nowMs, count: f.length },
+      features: f
+    };
+  }
+
+  // Simulates fetch()+.json() for a given fixture id.
+  // Resolves with parsed data on "success", rejects with a
+  // typed error ({ type }) on simulated failure.
+  function simulatedRequest(fixtureId){
+    var nowMs = Date.now();
+
+    if (fixtureId === 'slow'){
+      return new Promise(function(resolve){
+        setTimeout(function(){ resolve(buildSyntheticFeatureCollection(nowMs)); }, 4500);
+      });
+    }
+    if (fixtureId === '401' || fixtureId === '403'){
+      return new Promise(function(_, reject){
+        setTimeout(function(){ reject({ type: 'AUTH' }); }, 500);
+      });
+    }
+    if (fixtureId === 'ratelimit'){
+      return new Promise(function(_, reject){
+        setTimeout(function(){ reject({ type: 'RATE_LIMIT' }); }, 500);
+      });
+    }
+    if (fixtureId === 'offline'){
+      return new Promise(function(_, reject){
+        setTimeout(function(){ reject({ type: 'OFFLINE' }); }, 500);
+      });
+    }
+    if (fixtureId === 'schema'){
+      // Deliberately broken shape: "features" renamed, coordinates malformed
+      return new Promise(function(resolve){
+        setTimeout(function(){
+          resolve({ type: 'FeatureCollection', metadata: { generated: nowMs }, items: [] });
+        }, 500);
+      });
+    }
+    return null; // 'normal' → caller should do a real fetch
+  }
+
+  // Throws a typed SCHEMA error if the response doesn't look like a
+  // USGS FeatureCollection. Runs for both real and fixture responses,
+  // so an unexpected real API change would also be caught.
+  function validateUSGSResponse(data){
+    if (!data || data.type !== 'FeatureCollection' || !Array.isArray(data.features)){
+      throw { type: 'SCHEMA' };
+    }
+    return data;
+  }
+
+  function classifyError(err){
+    if (err && ERROR_TYPES[err.type]) return err.type;
+    if (err instanceof TypeError) return 'OFFLINE'; // real fetch() network failure
+    return 'UNKNOWN';
+  }
+
+  // ============================================================
   // Data fetch
   // ============================================================
   function fetchData(){
+    var isRefresh = state.allFeatures.length > 0; // had good data already?
     state.loading = true;
     state.error = null;
-    setStatus('loading', '연결 중…');
-    showOverlayLoading();
+    setStatus('loading', (isRefresh ? '새로고침 중…' : '연결 중…'));
+    if (!isRefresh){
+      showOverlayLoading();
+    }
 
-    fetch(USGS_URL)
-      .then(function(res){
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.json();
-      })
+    var fixtureId = state.activeFixture;
+    var simulated = fixtureId !== 'normal' ? simulatedRequest(fixtureId) : null;
+
+    var requestPromise = simulated
+      ? simulated
+      : fetch(USGS_URL).then(function(res){
+          if (!res.ok){
+            var type = (res.status === 401 || res.status === 403) ? 'AUTH'
+              : (res.status === 429) ? 'RATE_LIMIT' : 'UNKNOWN';
+            throw { type: type };
+          }
+          return res.json();
+        });
+
+    requestPromise
+      .then(validateUSGSResponse)
       .then(function(data){
-        var features = (data && data.features) || [];
-        var metadata = data && data.metadata;
+        var features = data.features;
+        var metadata = data.metadata;
         state.allFeatures = features;
         state.fetchedAt = Date.now();
         state.loading = false;
+        clearStale();
 
         var built = buildBuckets(state.fetchedAt);
         state.buckets = built.buckets;
@@ -1178,7 +1453,8 @@
         hideOverlay();
         var totalCount = (metadata && Number.isFinite(metadata.count)) ? metadata.count : features.length;
         setStatus('ok', 'USGS 연결됨 · ' + fmtKSTHour(state.fetchedAt) + ' 수신');
-        el.feedSubtitle.textContent = 'USGS M2.5+ · Past 7 Days · Total ' + totalCount + '건';
+        el.feedSubtitle.textContent = 'USGS M2.5+ · Past 7 Days · Total ' + totalCount + '건' +
+          (fixtureId !== 'normal' ? ' (TEST: ' + fixtureId + ')' : '');
         applyBucketFilter();
 
         // Daily record: independent of the live 7-day feed shown above —
@@ -1192,8 +1468,16 @@
       .catch(function(err){
         state.loading = false;
         state.error = err;
-        setStatus('err', '연결 실패');
-        showOverlayError();
+        var type = classifyError(err);
+
+        if (isRefresh){
+          // C17 + C18: keep whatever is already on screen, just flag it
+          setStatus('err', 'USGS 연결됨 · ' + fmtKSTHour(state.fetchedAt) + ' 수신 (STALE)');
+          showStale(type);
+        } else {
+          setStatus('err', '연결 실패 [' + (ERROR_TYPES[type] || ERROR_TYPES.UNKNOWN).label + ']');
+          showOverlayError(type);
+        }
       });
   }
 
@@ -1208,6 +1492,36 @@
 
   el.overlayRetry.addEventListener('click', function(){
     fetchData();
+  });
+
+  el.errorBannerRetry.addEventListener('click', function(){
+    fetchData();
+  });
+
+  // ============================================================
+  // Test / fixture panel (C12–C16, C19, C26)
+  // ============================================================
+  el.testToggle.addEventListener('click', function(evt){
+    evt.stopPropagation();
+    var isOpen = el.testPanel.style.display !== 'none';
+    el.testPanel.style.display = isOpen ? 'none' : 'block';
+  });
+
+  document.addEventListener('click', function(evt){
+    if (!el.testPanel.contains(evt.target) && evt.target !== el.testToggle){
+      el.testPanel.style.display = 'none';
+    }
+  });
+
+  var fixtureButtons = document.querySelectorAll('.fixture-opt');
+  fixtureButtons.forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var fixtureId = btn.getAttribute('data-fixture');
+      state.activeFixture = fixtureId;
+      fixtureButtons.forEach(function(b){ b.className = 'fixture-opt' + (b === btn ? ' active' : ''); });
+      el.testPanel.style.display = 'none';
+      fetchData();
+    });
   });
 
   // ============================================================
